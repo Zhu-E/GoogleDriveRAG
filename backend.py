@@ -10,7 +10,7 @@ client = OpenAI(api_key='***REDACTED***') # An openAI API key must be provided f
 
 
 def authenticate():
-    flow = InstalledAppFlow.from_client_secrets_file('client_secret.json', SCOPES)
+    flow = InstalledAppFlow.from_client_secrets_file('client_secret.json', SCOPES) # A client_secret must be provided within the client_secret.json file before the code will run.
     creds = flow.run_local_server(port=8080)
     return creds
 
