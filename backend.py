@@ -6,7 +6,7 @@ import numpy as np
 
 
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly', 'https://www.googleapis.com/auth/documents.readonly']
-client = OpenAI(api_key='***REDACTED***')
+client = OpenAI(api_key='***REDACTED***') # An openAI API key must be provided for the code to function.
 
 
 def authenticate():
