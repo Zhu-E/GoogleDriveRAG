@@ -3,14 +3,15 @@ from openai import OpenAI
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 import numpy as np
-
+import time
+import random
 
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly', 'https://www.googleapis.com/auth/documents.readonly']
 client = OpenAI(api_key='***REDACTED***') # An openAI API key must be provided for the code to function.
 
 
 def authenticate():
-    flow = InstalledAppFlow.from_client_secrets_file('client_secret.json', SCOPES) # A client_secret must be provided within the client_secret.json file before the code will run.
+    flow = InstalledAppFlow.from_client_secrets_file('client_secret.json', SCOPES)  # A client_secret must be provided within the client_secret.json file before the code will run.
     creds = flow.run_local_server(port=8080)
     return creds
 
@@ -47,10 +48,16 @@ def get_doc_content(docs_service, doc_id):
 
     return text
 
+
 def make_embedding(text, model="text-embedding-3-large"):
-    # print("EMBEDDED")
     text = text.replace("\n", " ")
-    return client.embeddings.create(input = [text], model = model).data[0].embedding
+    embed = client.embeddings.create(input = [text], model = model).data[0].embedding
+    print("EMBEDDED")
+    return embed
+
+def split_string(input_string, chunk_size):
+    return [input_string[i:i + chunk_size] for i in range(0, len(input_string), chunk_size)]
+
 
 def docs_to_df():
     # Authenticate the user
@@ -73,13 +80,38 @@ def docs_to_df():
         num+=1
         doc_id = doc['id']
         doc_name = doc['name']
-        content = get_doc_content(docs_service, doc_id)
-        new_row = pd.DataFrame(
-            {'Document Name': [doc_name], 'Document ID': [doc_id], 'Content': [content]})
-        df = pd.concat([df, new_row], ignore_index = True)
-    df['embeddings'] = df['Content'].apply(make_embedding)
+        content = ''
+        print(f"Attempting to download {doc_name}")
+        try:
+            content = get_doc_content(docs_service, doc_id)
+        except TimeoutError:
+            print('trying one more time after waiting a few seconds')
+            time.sleep(7+random.randint(3,6))
+            print('trying again now')
+            try:
+                content = get_doc_content(docs_service, doc_id)
+            except TimeoutError:
+                print('failed again, document is likely too big and moving on')
+        if len(content)<10000:
+            try:
+                embedding = make_embedding(content)
+                new_row = pd.DataFrame({'Document Name': [doc_name], 'Document ID': [doc_id], 'Content': [content], 'Embedding': [embedding]})
+                df = pd.concat([df, new_row], ignore_index = True)
+            except Exception as e:
+                print("There was an error embedding and this document will be ignored")
+        else:
+            chunks = split_string(content, 10000)
+            for chunk in chunks:
+                try:
+                    embedding = make_embedding(chunk)
+                    new_row = pd.DataFrame(
+                        {'Document Name': [doc_name], 'Document ID': [doc_id], 'Content': [chunk],
+                         'Embedding': [embedding]})
+                    df = pd.concat([df, new_row], ignore_index = True)
+                except Exception as e:
+                    print(f"There was an error embedding of type {e} and this document will be ignored. The text that caused this error is '{chunk}'")
     # Save the DataFrame to a CSV file
-    name = input("What would you like to name this csv")
+    name = input("What would you like to name this csv \n")
     df.to_csv(name + ".csv", index=False)
     return df
 
@@ -88,7 +120,7 @@ def load_df():
     def custom_converter(value):
         return np.array(eval(value))
     try:
-        df = pd.read_csv(name, converters = {'embeddings':custom_converter})
+        df = pd.read_csv(name, converters = {'Embedding':custom_converter})
     except FileNotFoundError as e:
         print("No file was found with this name, please try again")
         df = load_df()
@@ -97,8 +129,12 @@ def load_df():
 def RAGquery(df, question):
     question_embedding = make_embedding(question)
     def dot_distance(page_embedding):
-        return np.dot(page_embedding, question_embedding)
-    df['distance'] = df['embeddings'].apply(dot_distance)
+        try:
+            return np.dot(page_embedding, question_embedding)
+        except TypeError:
+            print("there was a type error so this document will be discarded")
+            return 0
+    df['distance'] = df['Embedding'].apply(dot_distance)
     df.sort_values('distance', ascending=False, inplace=True)
     context = 'DOCUMENT NAME: ' + df['Document Name'].iloc[0]+":\n{"+df['Content'].iloc[0]+"}\n"+'DOCUMENT NAME: '+df['Document Name'].iloc[1]+":\n{"+df['Content'].iloc[1]+"}\n"+'DOCUMENT NAME: '+df['Document Name'].iloc[2]+":\n{"+df['Content'].iloc[2]+"}\n"
     response = client.chat.completions.create(
