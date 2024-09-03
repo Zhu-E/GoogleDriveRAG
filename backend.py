@@ -11,7 +11,7 @@ client = OpenAI(api_key='***REDACTED***') # An openAI API key must be provided f
 
 
 def authenticate():
-    flow = InstalledAppFlow.from_client_secrets_file('client_secret.json', SCOPES)  # A client_secret must be provided within the client_secret.json file before the code will run.
+    flow = InstalledAppFlow.from_client_secrets_file('client_secret.json', SCOPES) # A client_secret must be provided within the client_secret.json file before the code will run.
     creds = flow.run_local_server(port=8080)
     return creds
 
@@ -58,6 +58,45 @@ def make_embedding(text, model="text-embedding-3-large"):
 def split_string(input_string, chunk_size):
     return [input_string[i:i + chunk_size] for i in range(0, len(input_string), chunk_size)]
 
+def doc_to_string(doc, docs_service):
+    doc_id = doc['id']
+    doc_name = doc['name']
+    content = ''
+    print(f"Attempting to download {doc_name}")
+    try:
+        content = get_doc_content(docs_service, doc_id)
+    except TimeoutError:
+        print('trying one more time after waiting a few seconds')
+        time.sleep(7 + random.randint(3, 6))
+        print('trying again now')
+        try:
+            content = get_doc_content(docs_service, doc_id)
+        except TimeoutError:
+            print('failed again, document is likely too big and moving on')
+    return content
+
+def small_content_to_df(content, df, doc):
+    doc_id = doc['id']
+    doc_name = doc['name']
+    try:
+        embedding = make_embedding(content)
+        new_row = {'Document Name': doc_name, 'Document ID': doc_id, 'Content': content,
+             'Embedding': embedding}
+        df.loc[len(df)] = new_row
+    except Exception as e:
+        print(f"There was an error embedding and this document will be ignored: {e}")
+
+def big_content_to_df(content, df, doc):
+    chunks = split_string(content, 10000)
+    for chunk in chunks:
+        small_content_to_df(chunk, df, doc)
+def put_into_df(docs_service, df, doc):
+    content = doc_to_string(doc, docs_service)
+    if len(content) < 10000:
+        small_content_to_df(content, df, doc)
+    else:
+        big_content_to_df(content, df, doc)
+
 
 def docs_to_df():
     # Authenticate the user
@@ -71,45 +110,15 @@ def docs_to_df():
     docs = list_google_docs(drive_service)
 
     # Initialize a DataFrame
-    df = pd.DataFrame(columns=['Document Name', 'Document ID', 'Content'])
+    df = pd.DataFrame(columns=['Document Name', 'Document ID', 'Content', 'Embedding'])
 
     # Retrieve and store content of each Google Doc
     num=0
     for doc in docs:
         print(f"Downloaded doc {num}")
         num+=1
-        doc_id = doc['id']
-        doc_name = doc['name']
-        content = ''
-        print(f"Attempting to download {doc_name}")
-        try:
-            content = get_doc_content(docs_service, doc_id)
-        except TimeoutError:
-            print('trying one more time after waiting a few seconds')
-            time.sleep(7+random.randint(3,6))
-            print('trying again now')
-            try:
-                content = get_doc_content(docs_service, doc_id)
-            except TimeoutError:
-                print('failed again, document is likely too big and moving on')
-        if len(content)<10000:
-            try:
-                embedding = make_embedding(content)
-                new_row = pd.DataFrame({'Document Name': [doc_name], 'Document ID': [doc_id], 'Content': [content], 'Embedding': [embedding]})
-                df = pd.concat([df, new_row], ignore_index = True)
-            except Exception as e:
-                print("There was an error embedding and this document will be ignored")
-        else:
-            chunks = split_string(content, 10000)
-            for chunk in chunks:
-                try:
-                    embedding = make_embedding(chunk)
-                    new_row = pd.DataFrame(
-                        {'Document Name': [doc_name], 'Document ID': [doc_id], 'Content': [chunk],
-                         'Embedding': [embedding]})
-                    df = pd.concat([df, new_row], ignore_index = True)
-                except Exception as e:
-                    print(f"There was an error embedding of type {e} and this document will be ignored. The text that caused this error is '{chunk}'")
+        put_into_df(docs_service, df, doc)
+
     # Save the DataFrame to a CSV file
     name = input("What would you like to name this csv \n")
     df.to_csv(name + ".csv", index=False)
