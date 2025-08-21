@@ -5,9 +5,14 @@ from googleapiclient.discovery import build
 import numpy as np
 import time
 import random
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+api_key=os.getenv("API_KEY")
 
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly', 'https://www.googleapis.com/auth/documents.readonly']
-client = OpenAI(api_key='***REDACTED***') # An openAI API key must be provided for the code to function.
+client = OpenAI(api_key) # An openAI API key must be provided for the code to function.
 
 
 def authenticate():
